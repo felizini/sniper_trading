@@ -425,9 +425,8 @@ class TradingEngine:
                 self.atr_initialized = True
                 delattr(self, '_tr_buffer')
         else:
-            # Wilder smoothing
-            alpha = 2 / (self.atr_period + 1)
-            self.atr_value = alpha * tr + (1 - alpha) * self.atr_value
+            # Wilder smoothing correto: ATR[novo] = (ATR[antigo] * (period-1) + TR[novo]) / period
+            self.atr_value = (self.atr_value * (self.atr_period - 1) + tr) / self.atr_period
 
         self.last_close_for_atr = close
 
