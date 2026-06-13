@@ -1,1 +1,4 @@
-(sniper_phoenix_v831.py is a source code file, so no .gitignore rules are needed)
+```
+__pycache__/
+*.pyc
+```
