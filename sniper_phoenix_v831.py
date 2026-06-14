@@ -330,6 +330,11 @@ class TradingEngine:
         self.lows = deque(maxlen=500)
         self.volumes_usd = deque(maxlen=500)
         self.candles_raw = deque(maxlen=200)
+        
+        # Históricos de EMAs para detecção de cruzamento
+        self.emas9 = deque(maxlen=500)
+        self.emas21 = deque(maxlen=500)
+        self.emas200 = deque(maxlen=500)
 
         # Indicadores
         self.rsi_period = config.get("entry_rsi_period", 14)
@@ -424,6 +429,11 @@ class TradingEngine:
             self.ema9_value = compute_ema(closes_list, self.ema_fast_period)
             self.ema21_value = compute_ema(closes_list, self.ema_slow_period)
             self.ema200_value = compute_ema(closes_list, self.ema_trend_period)
+            
+            # Armazenar históricos das EMAs para detecção de cruzamento
+            self.emas9.append(self.ema9_value)
+            self.emas21.append(self.ema21_value)
+            self.emas200.append(self.ema200_value)
 
     def _update_adx(self):
         """Atualiza ADX para filtro de tendência."""

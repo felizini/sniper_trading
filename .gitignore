@@ -1,36 +1,31 @@
 ```
-# Compiled Python files
-*.pyc
+# Python
 __pycache__/
+*.pyc
+*.pyo
+*.pyd
 
-# Logs
+# Logs and temp files
 *.log
-sniper_system.log
-
-# Data/output files
-*.csv
-*.json
+*.tmp
+*.swp
 
 # Environment
 .env
 .env.local
-.env.*
+*.env.*
+
+# Editors
+.vscode/
+.idea/
 
 # Dependencies
 .venv/
 venv/
 node_modules/
 
-# Editors
-.vscode/
-.idea/
-
 # Build artifacts
 dist/
 build/
 target/
-
-# Cache directories
-.mypy_cache/
-.pytest_cache/
 ```
