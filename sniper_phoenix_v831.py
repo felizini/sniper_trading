@@ -350,25 +350,28 @@ class TradingEngine:
         self.bias = 'NEUTRO'
         self.bias_confidence = 0.0
 
-        # Parâmetros por regime (V18 Trend Rider Adaptativo)
+        # Parâmetros por regime (V18 Trend Rider Adaptativo) - Carregados do CONFIG
         self.parametros = {
             'BULLISH': {
-                'sl_mult': 2.0,        # Stop Loss multiplier
-                'trail_dist': 3.5,     # Trailing stop distance
-                'trail_limiar': 2.0,   # Profit threshold to activate trailing
-                'adx_min': 20,         # Minimum ADX for trend strength
-                'rsi_max': 75,         # Maximum RSI (avoid overbought)
+                'sl_mult': config.get("v18_bullish_sl_mult", 2.0),        # Stop Loss multiplier
+                'trail_dist': config.get("v18_bullish_trail_dist", 3.5),     # Trailing stop distance
+                'trail_limiar': config.get("v18_bullish_trail_limiar", 2.0),   # Profit threshold to activate trailing
+                'adx_min': config.get("v18_bullish_adx_min", 20),         # Minimum ADX for trend strength
+                'rsi_max': config.get("v18_bullish_rsi_max", 75),         # Maximum RSI (avoid overbought)
             },
             'BEARISH': {
-                'sl_mult': 1.2,        # Stop Loss multiplier (mais apertado)
-                'trail_dist': 1.5,     # Trailing stop distance (mais agressivo)
-                'trail_limiar': 0.6,   # Profit threshold (ativa cedo)
-                'adx_min': 15,         # Minimum ADX (menor threshold)
-                'rsi_max': 60,         # Maximum RSI (mais conservador)
+                'sl_mult': config.get("v18_bearish_sl_mult", 1.2),        # Stop Loss multiplier (mais apertado)
+                'trail_dist': config.get("v18_bearish_trail_dist", 1.5),     # Trailing stop distance (mais agressivo)
+                'trail_limiar': config.get("v18_bearish_trail_limiar", 0.6),   # Profit threshold (ativa cedo)
+                'adx_min': config.get("v18_bearish_adx_min", 15),         # Minimum ADX (menor threshold)
+                'rsi_max': config.get("v18_bearish_rsi_max", 60),         # Maximum RSI (mais conservador)
             }
         }
 
-        # EMA para detecção de regime
+        # EMA para detecção de regime (carregados do CONFIG)
+        self.ema_fast_period = config.get("v18_regime_ema_fast", 9)
+        self.ema_slow_period = config.get("v18_regime_ema_slow", 21)
+        self.ema_trend_period = config.get("v18_regime_ema_trend", 200)
         self.ema9_value = 0.0
         self.ema21_value = 0.0
         self.ema200_value = 0.0
@@ -415,12 +418,12 @@ class TradingEngine:
         self.last_close_for_atr = close
 
     def _update_emas(self):
-        """Atualiza EMAs para detecção de regime."""
-        if len(self.closes) >= 200:
+        """Atualiza EMAs para detecção de regime (configuráveis via CONFIG)."""
+        if len(self.closes) >= self.ema_trend_period:
             closes_list = list(self.closes)
-            self.ema9_value = compute_ema(closes_list, 9)
-            self.ema21_value = compute_ema(closes_list, 21)
-            self.ema200_value = compute_ema(closes_list, 200)
+            self.ema9_value = compute_ema(closes_list, self.ema_fast_period)
+            self.ema21_value = compute_ema(closes_list, self.ema_slow_period)
+            self.ema200_value = compute_ema(closes_list, self.ema_trend_period)
 
     def _update_adx(self):
         """Atualiza ADX para filtro de tendência."""
@@ -943,6 +946,14 @@ CONFIG = {
     "trend_capital_multiplier": 1.0, "trend_use_trailing": True, "tp_trend": 3.0,
     "trend_trailing_activation_pct": 0.5,
     "atr_period": 14,
+    # Parâmetros V18 Trend Rider Adaptativo (valores padrão)
+    "v18_bullish_sl_mult": 2.0, "v18_bullish_trail_dist": 3.5, "v18_bullish_trail_limiar": 2.0,
+    "v18_bullish_adx_min": 20, "v18_bullish_rsi_max": 75,
+    "v18_bearish_sl_mult": 1.2, "v18_bearish_trail_dist": 1.5, "v18_bearish_trail_limiar": 0.6,
+    "v18_bearish_adx_min": 15, "v18_bearish_rsi_max": 60,
+    "v18_regime_ema_fast": 9, "v18_regime_ema_slow": 21, "v18_regime_ema_trend": 200,
+    # Gestão de risco
+    "RISK_PER_TRADE": 0.01,
 }
 
 # =============================================================================
@@ -1217,6 +1228,31 @@ def carregar_configuracoes():
             CONFIG["trend_use_trailing"] = tr.getboolean("trend_use_trailing", CONFIG["trend_use_trailing"])
             CONFIG["tp_trend"] = float(tr.get("tp_trend", CONFIG["tp_trend"]))
             CONFIG["trend_trailing_activation_pct"] = float(tr.get("trend_trailing_activation_pct", CONFIG["trend_trailing_activation_pct"]))
+
+        # Parâmetros específicos da estratégia V18 Trend Rider Adaptativo
+        if "v18_params" in cp:
+            v18 = cp["v18_params"]
+            # Regime BULLISH
+            CONFIG["v18_bullish_sl_mult"] = float(v18.get("bullish_sl_mult", 2.0))
+            CONFIG["v18_bullish_trail_dist"] = float(v18.get("bullish_trail_dist", 3.5))
+            CONFIG["v18_bullish_trail_limiar"] = float(v18.get("bullish_trail_limiar", 2.0))
+            CONFIG["v18_bullish_adx_min"] = int(v18.get("bullish_adx_min", 20))
+            CONFIG["v18_bullish_rsi_max"] = int(v18.get("bullish_rsi_max", 75))
+            # Regime BEARISH
+            CONFIG["v18_bearish_sl_mult"] = float(v18.get("bearish_sl_mult", 1.2))
+            CONFIG["v18_bearish_trail_dist"] = float(v18.get("bearish_trail_dist", 1.5))
+            CONFIG["v18_bearish_trail_limiar"] = float(v18.get("bearish_trail_limiar", 0.6))
+            CONFIG["v18_bearish_adx_min"] = int(v18.get("bearish_adx_min", 15))
+            CONFIG["v18_bearish_rsi_max"] = int(v18.get("bearish_rsi_max", 60))
+            # Detecção de regime
+            CONFIG["v18_regime_ema_fast"] = int(v18.get("regime_ema_fast", 9))
+            CONFIG["v18_regime_ema_slow"] = int(v18.get("regime_ema_slow", 21))
+            CONFIG["v18_regime_ema_trend"] = int(v18.get("regime_ema_trend", 200))
+
+        # Gestão de risco
+        if "risk" in cp:
+            risk = cp["risk"]
+            CONFIG["RISK_PER_TRADE"] = float(risk.get("risk_per_trade", 0.01))
 
     validate_config()
     Auditoria.configurar()
