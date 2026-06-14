@@ -500,8 +500,11 @@ class TradingEngine:
             cross_up = (prev_close <= self.ema21_value and close > self.ema21_value and 
                        self.ema9_value > self.ema21_value)
 
-            # Pullback na EMA9
-            pullback = (close > self.ema9_value and self.ema9_value > self.ema21_value)
+            # Pullback na EMA9 (preço tocou na EMA9 e fechou acima)
+            low = self.lows[-1] if self.lows else close
+            pullback = (low <= self.ema9_value * 1.002 and
+                       close > self.ema9_value and
+                       self.ema9_value > self.ema21_value)
 
             if cross_up:
                 return True, 'CROSS_UP'
@@ -513,8 +516,11 @@ class TradingEngine:
             cross_down = (prev_close >= self.ema21_value and close < self.ema21_value and 
                          self.ema9_value < self.ema21_value)
 
-            # Pullback na EMA9
-            pullback = (close < self.ema9_value and self.ema9_value < self.ema21_value)
+            # Pullback na EMA9 (preço tocou na EMA9 e fechou abaixo)
+            high = self.highs[-1] if self.highs else close
+            pullback = (high >= self.ema9_value * 0.998 and
+                       close < self.ema9_value and
+                       self.ema9_value < self.ema21_value)
 
             if cross_down:
                 return True, 'CROSS_DOWN'
