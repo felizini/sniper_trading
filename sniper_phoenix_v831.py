@@ -305,7 +305,7 @@ class DrawdownFilter:
         self.last_day = datetime.fromisoformat(last_day_str).date() if last_day_str else None
 
 # =============================================================================
-# MOTOR DE NEGOCIAÇÃO (VERSÃO CORRIGIDA)
+# MOTOR DE NEGOCIAÇÃO (VERSÃO V18 TREND RIDER ADAPTATIVO)
 # =============================================================================
 class TradingEngine:
     def __init__(self, config: Dict, exchange, state_lock, shared_state):
@@ -337,7 +337,7 @@ class TradingEngine:
         self.atr_period = config.get("atr_period", 14)
         self.atr_value = 0.0
         self.last_close_for_atr = None
-        self.atr_initialized = False  # flag para saber se o ATR já tem seeding
+        self.atr_initialized = False
 
         # Detectores
         self.regime_detector = RegimeDetector(config)
@@ -346,48 +346,36 @@ class TradingEngine:
             max_drawdown_pct=config.get("drawdown_max_pct", 40.0)
         )
 
-        # Estratégia de reversão (original)
-        self.reversal_enabled = config.get("REVERSAL_ENABLED", True)
-        self.rsi_threshold = config.get("entry_rsi_threshold", 15)
-        self.use_exhaust = config.get("entry_use_exhaust", True)
-        self.exhaust_lookback = config.get("entry_exhaust_lookback", 3)
-        self.use_wick = config.get("entry_use_wick", True)
-        self.wick_ratio = config.get("entry_wick_ratio", 0.25)
-        self.use_confirm = config.get("entry_use_confirm", True)
-        self.confirm_lookback = config.get("entry_confirm_lookback", 2)
-        self.use_volume = config.get("entry_use_volume", True)
-        self.volume_mult = config.get("entry_volume_mult", 1.2)
-        self.volume_lookback = config.get("entry_volume_lookback", 6)
-        self.use_drawdown_filter = config.get("entry_use_drawdown_filter", True)
+        # Bias atual (BULLISH, BEARISH ou NEUTRO)
+        self.bias = 'NEUTRO'
+        self.bias_confidence = 0.0
 
-        self.tp_bearish = config.get("tp_bearish", 0.8)
-        self.sl_bearish = config.get("sl_bearish", 3.0)
-        self.tp_bullish = config.get("tp_bullish", 2.0)
-        self.sl_bullish = config.get("sl_bullish", 3.0)
-        self.lateral_enabled = config.get("lateral_enabled", False)
+        # Parâmetros por regime (V18 Trend Rider Adaptativo) - Carregados do CONFIG
+        self.parametros = {
+            'BULLISH': {
+                'sl_mult': config.get("v18_bullish_sl_mult", 2.0),        # Stop Loss multiplier
+                'trail_dist': config.get("v18_bullish_trail_dist", 3.5),     # Trailing stop distance
+                'trail_limiar': config.get("v18_bullish_trail_limiar", 2.0),   # Profit threshold to activate trailing
+                'adx_min': config.get("v18_bullish_adx_min", 20),         # Minimum ADX for trend strength
+                'rsi_max': config.get("v18_bullish_rsi_max", 75),         # Maximum RSI (avoid overbought)
+            },
+            'BEARISH': {
+                'sl_mult': config.get("v18_bearish_sl_mult", 1.2),        # Stop Loss multiplier (mais apertado)
+                'trail_dist': config.get("v18_bearish_trail_dist", 1.5),     # Trailing stop distance (mais agressivo)
+                'trail_limiar': config.get("v18_bearish_trail_limiar", 0.6),   # Profit threshold (ativa cedo)
+                'adx_min': config.get("v18_bearish_adx_min", 15),         # Minimum ADX (menor threshold)
+                'rsi_max': config.get("v18_bearish_rsi_max", 60),         # Maximum RSI (mais conservador)
+            }
+        }
 
-        # ----- Estratégias de tendência -----
-        self.breakout_enabled = config.get("breakout_enabled", False)
-        self.breakout_period = config.get("breakout_period", 20)
-        self.breakout_trailing_atr_factor = config.get("breakout_trailing_atr_factor", 2.0)
-        self.breakout_min_volume_ratio = config.get("breakout_min_volume_ratio", 1.2)
-
-        self.pullback_enabled = config.get("pullback_enabled", False)
-        self.pullback_ema_period = config.get("pullback_ema_period", 21)
-        self.pullback_max_distance_pct = config.get("pullback_max_distance_pct", 1.5)
-        self.pullback_confirmation = config.get("pullback_confirmation", True)
-        self.pullback_trailing_atr_factor = config.get("pullback_trailing_atr_factor", 1.5)
-        self.pullback_min_volume_ratio = config.get("pullback_min_volume_ratio", 1.0)
-
-        self.momentum_enabled = config.get("momentum_enabled", False)
-        self.momentum_rsi_threshold = config.get("momentum_rsi_threshold", 65)
-        self.momentum_trailing_atr_factor = config.get("momentum_trailing_atr_factor", 2.5)
-        self.momentum_min_volume_ratio = config.get("momentum_min_volume_ratio", 1.2)
-
-        self.trend_capital_multiplier = config.get("trend_capital_multiplier", 1.0)
-        self.trend_use_trailing = config.get("trend_use_trailing", True)
-        self.tp_trend = config.get("tp_trend", 3.0)
-        self.trend_trailing_activation_pct = config.get("trend_trailing_activation_pct", 0.5)
+        # EMA para detecção de regime (carregados do CONFIG)
+        self.ema_fast_period = config.get("v18_regime_ema_fast", 9)
+        self.ema_slow_period = config.get("v18_regime_ema_slow", 21)
+        self.ema_trend_period = config.get("v18_regime_ema_trend", 200)
+        self.ema9_value = 0.0
+        self.ema21_value = 0.0
+        self.ema200_value = 0.0
+        self.adx_value = 0.0
 
         # Minimo notional
         try:
@@ -402,7 +390,7 @@ class TradingEngine:
         self._last_volume_ratio = 0.0
         self._last_wick = 0.0
 
-    # ---------- Indicadores (corrigidos) ----------
+    # ---------- Indicadores ----------
     def _update_rsi(self):
         if len(self.closes) < self.rsi_period + 1:
             self.rsi_value = 50.0
@@ -417,7 +405,6 @@ class TradingEngine:
 
         tr = max(high - low, abs(high - self.last_close_for_atr), abs(low - self.last_close_for_atr))
         if not self.atr_initialized:
-            # Acumula os primeiros `atr_period` TRs para seeding
             if not hasattr(self, '_tr_buffer'):
                 self._tr_buffer = []
             self._tr_buffer.append(tr)
@@ -426,168 +413,148 @@ class TradingEngine:
                 self.atr_initialized = True
                 delattr(self, '_tr_buffer')
         else:
-            # Wilder smoothing correto: ATR[novo] = (ATR[antigo] * (period-1) + TR[novo]) / period
             self.atr_value = (self.atr_value * (self.atr_period - 1) + tr) / self.atr_period
 
         self.last_close_for_atr = close
 
-    def _check_volume_ratio(self, volume_usd: float, min_ratio: float) -> bool:
-        if len(self.volumes_usd) < self.volume_lookback + 1:
-            return False
-        vols = list(self.volumes_usd)[-self.volume_lookback-1:-1]
-        if not vols:
-            return False
-        avg = sum(vols) / len(vols)
-        self._last_volume_ratio = volume_usd / avg if avg > 0 else 0
-        return volume_usd >= avg * min_ratio
+    def _update_emas(self):
+        """Atualiza EMAs para detecção de regime (configuráveis via CONFIG)."""
+        if len(self.closes) >= self.ema_trend_period:
+            closes_list = list(self.closes)
+            self.ema9_value = compute_ema(closes_list, self.ema_fast_period)
+            self.ema21_value = compute_ema(closes_list, self.ema_slow_period)
+            self.ema200_value = compute_ema(closes_list, self.ema_trend_period)
 
-    # ---------- Condições de tendência (corrigidas) ----------
-    def _is_bullish_allowed(self) -> bool:
-        regime = self.regime_detector.get_regime()
-        if regime == REGIME_BULLISH:
-            return True
-        if regime == REGIME_LATERAL and self.lateral_enabled:
-            return True
-        return False
+    def _update_adx(self):
+        """Atualiza ADX para filtro de tendência."""
+        if len(self.closes) >= 30:
+            highs = list(self.highs)[-30:]
+            lows = list(self.lows)[-30:]
+            closes = list(self.closes)[-30:]
+            self.adx_value, _, _ = compute_adx(highs, lows, closes, 14)
 
-    def _get_higher_tf_high(self, n: int) -> float:
-        candles = self.regime_detector.candles_1h
-        if len(candles) < n:
-            return 0.0
-        recent = [c['high'] for c in candles[-n:]]
-        return max(recent)
+    def _detectar_regime(self):
+        """
+        Detecta o regime de mercado atual baseado em múltiplos fatores.
+        
+        Critérios:
+        - BULLISH: Preço > EMA200 E EMA9 > EMA21
+        - BEARISH: Preço < EMA200 E EMA9 < EMA21
+        - NEUTRO: Condições mistas ou sem tendência clara
+        """
+        if len(self.closes) < 200 or self.ema200_value == 0:
+            return 'NEUTRO', 0.0
 
-    def _get_ema(self, period: int) -> float:
-        return compute_ema(list(self.closes), period)
+        close = self.closes[-1]
+        preco_vs_ema200 = close > self.ema200_value
+        ema9_vs_ema21 = self.ema9_value > self.ema21_value
 
-    def _get_adx_current(self) -> float:
-        """Retorna ADX atual baseado nos candles de 1h (para filtro de momentum)."""
-        candles = self.regime_detector.candles_1h
-        if len(candles) < 30:
-            return 0.0
-        highs = [c['high'] for c in candles[-30:]]
-        lows  = [c['low'] for c in candles[-30:]]
-        closes = [c['close'] for c in candles[-30:]]
-        adx, _, _ = compute_adx(highs, lows, closes, 14)
-        return adx
+        # Calcular distâncias para força do sinal
+        if preco_vs_ema200:
+            dist_ema200 = (close - self.ema200_value) / close * 100
+        else:
+            dist_ema200 = (self.ema200_value - close) / close * 100
 
-    def _check_breakout_entry(self, close: float, volume_usd: float) -> Tuple[bool, str]:
-        if not self.breakout_enabled or not self._is_bullish_allowed():
-            return False, ""
-        max_n = self._get_higher_tf_high(self.breakout_period)
-        if max_n == 0 or close <= max_n:
-            return False, ""
-        if not self._check_volume_ratio(volume_usd, self.breakout_min_volume_ratio):
-            return False, ""
-        return True, "BREAKOUT"
+        if ema9_vs_ema21:
+            dist_ema9_21 = (self.ema9_value - self.ema21_value) / close * 100
+        else:
+            dist_ema9_21 = (self.ema21_value - self.ema9_value) / close * 100
 
-    def _check_pullback_entry(self, close: float, volume_usd: float, low: float, high: float) -> Tuple[bool, str]:
-        if not self.pullback_enabled or not self._is_bullish_allowed():
-            return False, ""
-        ema21 = self._get_ema(self.pullback_ema_period)
-        if ema21 == 0:
-            return False, ""
-        distance_pct = abs(close - ema21) / ema21 * 100
-        if distance_pct > self.pullback_max_distance_pct:
-            return False, ""
-        if low > ema21:   # não tocou na EMA por baixo
-            return False, ""
-        if not self._check_volume_ratio(volume_usd, self.pullback_min_volume_ratio):
-            return False, ""
-        if self.pullback_confirmation:
-            if len(self.candles_raw) < 2:
-                return False, ""
-            prev_close = self.candles_raw[-2]['c']
-            # Confirmação: vela atual é de alta (close > open) e fechou acima do close anterior ou high anterior
-            if close <= self.candles_raw[-1]['o']:   # não é vela de alta
-                return False, ""
-            if close <= prev_close:
-                return False, ""
-        return True, "PULLBACK"
+        # Determinar regime
+        if preco_vs_ema200 and ema9_vs_ema21:
+            regime = 'BULLISH'
+            confianca = min(100, (dist_ema200 + dist_ema9_21) * 10)
+        elif not preco_vs_ema200 and not ema9_vs_ema21:
+            regime = 'BEARISH'
+            confianca = min(100, (dist_ema200 + dist_ema9_21) * 10)
+        else:
+            regime = 'NEUTRO'
+            confianca = 0.0
 
-    def _check_momentum_entry(self, close: float, volume_usd: float) -> Tuple[bool, str]:
-        if not self.momentum_enabled or not self._is_bullish_allowed():
-            return False, ""
-        if self.rsi_value < self.momentum_rsi_threshold:
-            return False, ""
-        # Filtro adicional: ADX > 25 para garantir força da tendência
-        adx = self._get_adx_current()
-        if adx < 25:
-            return False, ""
-        if not self._check_volume_ratio(volume_usd, self.momentum_min_volume_ratio):
-            return False, ""
-        return True, "MOMENTUM"
+        return regime, confianca
 
-    # ---------- Condições de reversão (original, sem mudanças) ----------
-    def _check_exhaustion(self) -> bool:
-        if not self.use_exhaust or len(self.candles_raw) < self.exhaust_lookback + 1:
-            return not self.use_exhaust
-        candles = list(self.candles_raw)
-        idx = len(candles) - 1
-        if idx < self.exhaust_lookback:
-            return False
-        recent_lows = [c['l'] for c in candles[idx - self.exhaust_lookback:idx]]
-        prior_min = min(recent_lows)
-        current = candles[idx]
-        return current['l'] < prior_min and current['c'] > prior_min
+    def _verificar_condicoes_entrada(self, params):
+        """
+        Verifica se todas as condições para entrada estão satisfeitas.
+        
+        Condições:
+        1. ADX >= adx_min (tendência forte o suficiente)
+        2. RSI <= rsi_max (não sobrecomprado/vendido)
+        3. Padrão de entrada (cruzamento ou pullback)
+        """
+        if not self.atr_initialized or self.atr_value <= 0:
+            return False, None
 
-    def _check_lower_wick(self) -> bool:
-        if not self.use_wick:
-            return True
-        if not self.candles_raw:
-            return False
-        c = self.candles_raw[-1]
-        rng = c['h'] - c['l']
-        if rng <= 0:
-            return False
-        wick_lower = (min(c['o'], c['c']) - c['l']) / rng
-        self._last_wick = wick_lower
-        return wick_lower >= self.wick_ratio
+        if self.adx_value < params['adx_min']:
+            return False, 'ADX baixo'
 
-    def _check_confirmation(self) -> bool:
-        if not self.use_confirm or len(self.candles_raw) < 2:
-            return not self.use_confirm
-        candles = list(self.candles_raw)
-        idx = len(candles) - 1
-        prev = candles[idx-1]
-        close = candles[idx]['c']
-        if close > prev['h']:
-            return True
-        start = max(0, idx - self.confirm_lookback)
-        recent_highs = [candles[i]['h'] for i in range(start, idx)]
-        if recent_highs and close > max(recent_highs):
-            return True
-        return close > prev['o'] and close > prev['c']
+        if self.rsi_value > params['rsi_max']:
+            return False, 'RSI alto'
 
-    # ---------- Ações de mercado (corrigidas) ----------
+        close = self.closes[-1] if self.closes else 0
+        prev_close = self.closes[-2] if len(self.closes) >= 2 else 0
+
+        # Verificar padrão de entrada baseado no bias
+        if self.bias == 'BULLISH':
+            # Cruzamento de alta
+            cross_up = (prev_close <= self.ema21_value and close > self.ema21_value and 
+                       self.ema9_value > self.ema21_value)
+
+            # Pullback na EMA9
+            pullback = (close > self.ema9_value and self.ema9_value > self.ema21_value)
+
+            if cross_up:
+                return True, 'CROSS_UP'
+            elif pullback:
+                return True, 'PULLBACK'
+
+        elif self.bias == 'BEARISH':
+            # Cruzamento de baixa
+            cross_down = (prev_close >= self.ema21_value and close < self.ema21_value and 
+                         self.ema9_value < self.ema21_value)
+
+            # Pullback na EMA9
+            pullback = (close < self.ema9_value and self.ema9_value < self.ema21_value)
+
+            if cross_down:
+                return True, 'CROSS_DOWN'
+            elif pullback:
+                return True, 'PULLBACK'
+
+        return False, None
+
+    # ---------- Ações de mercado ----------
     def _open_position(self, price: float, ts: int, strategy: str, regime: str):
-        # Determina parâmetros conforme estratégia
-        if strategy == "REVERSAL":
-            tp = self.tp_bearish
-            sl = self.sl_bearish
-            capital_mult = 1.0
-            use_trailing = False
-            trailing_atr_factor = 0
-            trailing_activation = 0
-        else:  # estratégias de tendência
-            tp = self.tp_trend if not self.trend_use_trailing else 0
-            sl = 0  # será definido via ATR depois
-            capital_mult = self.trend_capital_multiplier
-            use_trailing = self.trend_use_trailing
-            if strategy == "BREAKOUT":
-                trailing_atr_factor = self.breakout_trailing_atr_factor
-            elif strategy == "PULLBACK":
-                trailing_atr_factor = self.pullback_trailing_atr_factor
-            else:
-                trailing_atr_factor = self.momentum_trailing_atr_factor
-            trailing_activation = self.trend_trailing_activation_pct
+        """Abre uma posição com gestão de risco baseada em ATR (V18)."""
+        if not self.atr_initialized or self.atr_value <= 0:
+            return False
 
-        cost = self.base_capital * capital_mult
+        params = self.parametros[self.bias]
+
+        # Calcular stop loss baseado em ATR
+        if self.bias == 'BULLISH':
+            sl_distance = params['sl_mult'] * self.atr_value
+            sl_price = price - sl_distance
+        else:  # BEARISH
+            sl_distance = params['sl_mult'] * self.atr_value
+            sl_price = price + sl_distance
+
+        risk = abs(sl_price - price)
+        if risk <= 0:
+            return False
+
+        # Calcular quantidade baseada no risco
+        risk_per_trade = self.config.get("RISK_PER_TRADE", 0.01)
+        qty = int((self.base_capital * risk_per_trade) / risk)
+        if qty <= 0:
+            return False
+
+        cost = qty * price
         if self.cash < cost:
             return False
 
-        obs = f"estrat={strategy} regime={regime} rsi={self.rsi_value:.1f}"
-        ordem = comprar_com_vault(cost, motivo=f"Entrada {strategy}", obs=obs)
+        obs = f"estrat={strategy} regime={regime} rsi={self.rsi_value:.1f} adx={self.adx_value:.1f}"
+        ordem = comprar_com_vault(cost, motivo=f"Entrada {strategy} ({regime})", obs=obs)
         if not ordem['ok']:
             return False
 
@@ -603,32 +570,20 @@ class TradingEngine:
             "openTime": ts,
             "strategy": strategy,
             "regime": regime,
-            "use_trailing": use_trailing,
-            "trailing_atr_factor": trailing_atr_factor,
-            "trailing_activation_pct": trailing_activation,
+            "bias": self.bias,
+            "use_trailing": True,
+            "trailing_atr_factor": params['trail_dist'],
+            "trailing_activation_pct": params['trail_limiar'],
             "trailing_active": False,
-            "trailing_stop": 0.0,
+            "trailing_stop": sl_price,
             "max_price": preco_real,
+            "sl_price": sl_price,
+            "tp_price": None,
         }
-
-        # Stop loss fixo (apenas para reversão)
-        if strategy == "REVERSAL":
-            self.position["sl_price"] = preco_real * (1 - sl/100)
-            self.position["tp_price"] = preco_real * (1 + tp/100)
-        else:
-            # Stop loss inicial baseado em ATR (com fallback)
-            atr_mult = 1.5
-            if self.atr_initialized and self.atr_value > 0:
-                stop_distance = self.atr_value * atr_mult
-            else:
-                # Fallback: 2% do preço
-                stop_distance = preco_real * 0.02
-            self.position["sl_price"] = preco_real - stop_distance
-            self.position["tp_price"] = None  # sem TP fixo
 
         with self.state_lock:
             self.shared_state["em_operacao"] = True
-            self.shared_state["marcha"] = f"POSIÇÃO ATIVA [{strategy}]"
+            self.shared_state["marcha"] = f"POSIÇÃO ATIVA [{strategy} - {regime}]"
             self.shared_state["preco_medio"] = preco_real
 
         self.entry_conditions = {}
@@ -665,30 +620,59 @@ class TradingEngine:
     def _update_trailing_stop(self, high: float, low: float, close: float, ts: int):
         if self.position is None or not self.position.get("use_trailing", False):
             return
-        # Atualiza preço máximo
-        if high > self.position["max_price"]:
-            self.position["max_price"] = high
-        # Ativa trailing após lucro mínimo
-        if not self.position["trailing_active"]:
-            profit_pct = (close - self.position["avgCost"]) / self.position["avgCost"] * 100
-            if profit_pct >= self.position["trailing_activation_pct"]:
-                self.position["trailing_active"] = True
-                if self.atr_initialized and self.atr_value > 0:
-                    self.position["trailing_stop"] = self.position["max_price"] - (self.atr_value * self.position["trailing_atr_factor"])
-                else:
-                    # Fallback: 1.5% de trailing
-                    self.position["trailing_stop"] = self.position["max_price"] * 0.985
-        else:
-            if self.atr_initialized and self.atr_value > 0:
-                new_stop = self.position["max_price"] - (self.atr_value * self.position["trailing_atr_factor"])
-            else:
-                new_stop = self.position["max_price"] * 0.985
-            if new_stop > self.position["trailing_stop"]:
-                self.position["trailing_stop"] = new_stop
-            if low <= self.position["trailing_stop"]:
-                self._close_position(low, ts, "TRAILING_STOP")
 
-    # ---------- Processamento de candle (corrigido) ----------
+        params = self.parametros.get(self.bias, self.parametros['BULLISH'])
+
+        if self.bias == 'BULLISH':
+            # Atualiza preço máximo
+            if high > self.position["max_price"]:
+                self.position["max_price"] = high
+
+            # Ativa trailing após lucro mínimo
+            if not self.position["trailing_active"]:
+                profit_pct = (close - self.position["avgCost"]) / self.position["avgCost"] * 100
+                if profit_pct >= params['trail_limiar']:
+                    self.position["trailing_active"] = True
+                    if self.atr_initialized and self.atr_value > 0:
+                        self.position["trailing_stop"] = self.position["max_price"] - (params['trail_dist'] * self.atr_value)
+                    else:
+                        self.position["trailing_stop"] = self.position["max_price"] * 0.985
+            else:
+                if self.atr_initialized and self.atr_value > 0:
+                    new_stop = self.position["max_price"] - (params['trail_dist'] * self.atr_value)
+                else:
+                    new_stop = self.position["max_price"] * 0.985
+                if new_stop > self.position["trailing_stop"]:
+                    self.position["trailing_stop"] = new_stop
+                if low <= self.position["trailing_stop"]:
+                    self._close_position(self.position["trailing_stop"], ts, "TRAILING_STOP")
+
+        elif self.bias == 'BEARISH':
+            # Atualiza preço mínimo (para short)
+            if close < self.position["max_price"] or self.position["max_price"] == self.position["avgCost"]:
+                if close < self.position["max_price"]:
+                    self.position["max_price"] = close
+
+            # Ativa trailing após lucro mínimo
+            if not self.position["trailing_active"]:
+                profit_pct = (self.position["avgCost"] - close) / self.position["avgCost"] * 100
+                if profit_pct >= params['trail_limiar']:
+                    self.position["trailing_active"] = True
+                    if self.atr_initialized and self.atr_value > 0:
+                        self.position["trailing_stop"] = self.position["max_price"] + (params['trail_dist'] * self.atr_value)
+                    else:
+                        self.position["trailing_stop"] = self.position["max_price"] * 1.015
+            else:
+                if self.atr_initialized and self.atr_value > 0:
+                    new_stop = self.position["max_price"] + (params['trail_dist'] * self.atr_value)
+                else:
+                    new_stop = self.position["max_price"] * 1.015
+                if new_stop < self.position["trailing_stop"] or self.position["trailing_stop"] == self.position["sl_price"]:
+                    self.position["trailing_stop"] = new_stop
+                if high >= self.position["trailing_stop"]:
+                    self._close_position(self.position["trailing_stop"], ts, "TRAILING_STOP")
+
+    # ---------- Processamento de candle ----------
     def on_candle(self, candle: Dict):
         ts = candle['t']
         open_p = candle['o']
@@ -709,8 +693,30 @@ class TradingEngine:
         # Indicadores
         self._update_rsi()
         self._update_atr(high, low, close)
+        self._update_emas()
+        self._update_adx()
         self.regime_detector.update(ts, open_p, high, low, close)
         self.drawdown_filter.update(ts, high, close)
+
+        # Detectar regime atual
+        novo_bias, confianca = self._detectar_regime()
+
+        # Log mudança de regime
+        if novo_bias != self.bias and novo_bias != 'NEUTRO':
+            logging.info(f"Mudança de regime: {self.bias} -> {novo_bias} (confiança: {confianca:.1f}%)")
+
+        # Fechar posição se regime mudou contra nós
+        if self.position is not None and novo_bias != 'NEUTRO' and novo_bias != self.bias:
+            logging.info(f"Fechando posição {self.bias} devido mudança de regime para {novo_bias}")
+            self._close_position(close, ts, "MUDANCA_REGIME")
+            self.bias = novo_bias
+            self.bias_confidence = confianca
+            return
+
+        # Atualizar bias atual
+        if novo_bias != 'NEUTRO':
+            self.bias = novo_bias
+            self.bias_confidence = confianca
 
         # Cooldown
         if self.cooldown > 0:
@@ -718,67 +724,44 @@ class TradingEngine:
 
         # Gerenciar posição existente
         if self.position is not None:
-            # Verifica stop loss fixo (apenas reversão)
-            if "sl_price" in self.position and low <= self.position["sl_price"]:
-                self._close_position(self.position["sl_price"], ts, "STOP_LOSS")
-                return
-            if "tp_price" in self.position and self.position["tp_price"] and high >= self.position["tp_price"]:
-                self._close_position(self.position["tp_price"], ts, "TAKE_PROFIT")
-                return
-            # Trailing stop para tendência
+            # Verifica stop loss fixo
+            if "sl_price" in self.position:
+                if self.bias == 'BULLISH' and low <= self.position["sl_price"]:
+                    self._close_position(self.position["sl_price"], ts, "STOP_LOSS")
+                    return
+                elif self.bias == 'BEARISH' and high >= self.position["sl_price"]:
+                    self._close_position(self.position["sl_price"], ts, "STOP_LOSS")
+                    return
+
+            # Trailing stop
             if self.position.get("use_trailing", False):
                 self._update_trailing_stop(high, low, close, ts)
             return
 
-        # --- Verificar entrada (prioridade: reversão > breakout > pullback > momentum) ---
+        # --- Verificar entrada ---
         if self.cooldown > 0:
             return
 
-        regime = self.regime_detector.get_regime()
-        regime_ok = regime is not None and regime != REGIME_CRASH
-        if regime == REGIME_LATERAL and not self.lateral_enabled:
-            regime_ok = False
+        # Verificar drawdown filter
+        drawdown_ok = not self.config.get("entry_use_drawdown_filter", True) or self.drawdown_filter.allowed()
+        if not drawdown_ok:
+            return
 
-        # Estratégia de reversão (apenas em BEARISH)
-        if self.reversal_enabled and regime == REGIME_BEARISH and regime_ok:
-            rsi_ok = self.rsi_value <= self.rsi_threshold
-            exhaust_ok = self._check_exhaustion()
-            wick_ok = self._check_lower_wick()
-            confirm_ok = self._check_confirmation()
-            volume_ok = self._check_volume_ratio(volume_usd, self.volume_mult)
-            drawdown_ok = not self.use_drawdown_filter or self.drawdown_filter.allowed()
-            if all([rsi_ok, exhaust_ok, wick_ok, confirm_ok, volume_ok, drawdown_ok]):
-                self.entry_conditions = {
-                    "RSI≤15": rsi_ok,
-                    "Exaustão": exhaust_ok,
-                    "Pavio≥25%": wick_ok,
-                    "Confirmação": confirm_ok,
-                    "Volume": volume_ok,
-                    "Drawdown≤40%": drawdown_ok,
-                }
-                self._open_position(close, ts, "REVERSAL", regime)
-                return
+        # Se temos bias definido, procurar entrada
+        if self.bias in ['BULLISH', 'BEARISH']:
+            params = self.parametros[self.bias]
+            pode_entrar, tipo = self._verificar_condicoes_entrada(params)
 
-        # Estratégias de tendência (apenas em BULLISH ou LATERAL habilitado)
-        if self._is_bullish_allowed():
-            # Breakout
-            ok, strat = self._check_breakout_entry(close, volume_usd)
-            if ok:
-                self.entry_conditions = {"Breakout": True, "Volume": True}
-                self._open_position(close, ts, strat, regime)
-                return
-            # Pullback
-            ok, strat = self._check_pullback_entry(close, volume_usd, low, high)
-            if ok:
-                self.entry_conditions = {"Pullback": True, "Volume": True}
-                self._open_position(close, ts, strat, regime)
-                return
-            # Momentum
-            ok, strat = self._check_momentum_entry(close, volume_usd)
-            if ok:
-                self.entry_conditions = {"Momentum": True, "Volume": True, "ADX>25": True}
-                self._open_position(close, ts, strat, regime)
-                return
+            if pode_entrar:
+                regime_name = f"{self.bias}_REGIME"
+                if self._open_position(close, ts, tipo or "TREND", regime_name):
+                    self.entry_conditions = {
+                        "Bias": self.bias,
+                        "ADX": f"{self.adx_value:.1f}",
+                        "RSI": f"{self.rsi_value:.1f}",
+                        "Tipo": tipo or "DESCONHECIDO"
+                    }
+                    return
 
         # Se nenhuma estratégia ativou, placar vazio
         self.entry_conditions = {}
@@ -794,6 +777,8 @@ class TradingEngine:
             "atr_value": self.atr_value,
             "atr_initialized": self.atr_initialized,
             "last_close_for_atr": self.last_close_for_atr,
+            "bias": self.bias,
+            "bias_confidence": self.bias_confidence,
             "entry_conditions": self.entry_conditions,
             "entry_mode": self.entry_mode,
             "regime_detector": self.regime_detector.to_dict(),
@@ -814,6 +799,8 @@ class TradingEngine:
         self.atr_value = data.get("atr_value", 0.0)
         self.atr_initialized = data.get("atr_initialized", False)
         self.last_close_for_atr = data.get("last_close_for_atr")
+        self.bias = data.get("bias", 'NEUTRO')
+        self.bias_confidence = data.get("bias_confidence", 0.0)
         self.entry_conditions = data.get("entry_conditions", {})
         self.entry_mode = data.get("entry_mode")
         self.regime_detector.from_dict(data.get("regime_detector", {}))
@@ -826,20 +813,25 @@ class TradingEngine:
         self._update_rsi()
         # Se o ATR não estava inicializado e temos dados suficientes, podemos tentar inicializar
         if not self.atr_initialized and len(self.highs) >= self.atr_period:
-            # Recalcula ATR a partir dos históricos
             highs_list = list(self.highs)
             lows_list = list(self.lows)
             closes_list = list(self.closes)
             if len(highs_list) >= self.atr_period:
                 self.atr_value = compute_atr(highs_list, lows_list, closes_list, self.atr_period)
                 self.atr_initialized = True
+        # Atualiza EMAs e ADX se houver dados suficientes
+        self._update_emas()
+        self._update_adx()
 
     def get_ui_state(self) -> Dict:
-        regime = self.regime_detector.get_regime() if self.regime_detector else "DESCONHECIDO"
+        regime = self.bias if self.bias != 'NEUTRO' else (self.regime_detector.get_regime() or "DESCONHECIDO")
         return {
-            "current_regime": regime or "DESCONHECIDO",
+            "current_regime": regime,
+            "bias": self.bias,
+            "bias_confidence": self.bias_confidence,
             "drawdown_pct": self.drawdown_filter.current_drawdown(),
             "rsi": self.rsi_value,
+            "adx": self.adx_value,
             "entry_conditions": self.entry_conditions,
             "entry_mode": self.entry_mode,
             "cash": self.cash,
@@ -954,6 +946,14 @@ CONFIG = {
     "trend_capital_multiplier": 1.0, "trend_use_trailing": True, "tp_trend": 3.0,
     "trend_trailing_activation_pct": 0.5,
     "atr_period": 14,
+    # Parâmetros V18 Trend Rider Adaptativo (valores padrão)
+    "v18_bullish_sl_mult": 2.0, "v18_bullish_trail_dist": 3.5, "v18_bullish_trail_limiar": 2.0,
+    "v18_bullish_adx_min": 20, "v18_bullish_rsi_max": 75,
+    "v18_bearish_sl_mult": 1.2, "v18_bearish_trail_dist": 1.5, "v18_bearish_trail_limiar": 0.6,
+    "v18_bearish_adx_min": 15, "v18_bearish_rsi_max": 60,
+    "v18_regime_ema_fast": 9, "v18_regime_ema_slow": 21, "v18_regime_ema_trend": 200,
+    # Gestão de risco
+    "RISK_PER_TRADE": 0.01,
 }
 
 # =============================================================================
@@ -1228,6 +1228,31 @@ def carregar_configuracoes():
             CONFIG["trend_use_trailing"] = tr.getboolean("trend_use_trailing", CONFIG["trend_use_trailing"])
             CONFIG["tp_trend"] = float(tr.get("tp_trend", CONFIG["tp_trend"]))
             CONFIG["trend_trailing_activation_pct"] = float(tr.get("trend_trailing_activation_pct", CONFIG["trend_trailing_activation_pct"]))
+
+        # Parâmetros específicos da estratégia V18 Trend Rider Adaptativo
+        if "v18_params" in cp:
+            v18 = cp["v18_params"]
+            # Regime BULLISH
+            CONFIG["v18_bullish_sl_mult"] = float(v18.get("bullish_sl_mult", 2.0))
+            CONFIG["v18_bullish_trail_dist"] = float(v18.get("bullish_trail_dist", 3.5))
+            CONFIG["v18_bullish_trail_limiar"] = float(v18.get("bullish_trail_limiar", 2.0))
+            CONFIG["v18_bullish_adx_min"] = int(v18.get("bullish_adx_min", 20))
+            CONFIG["v18_bullish_rsi_max"] = int(v18.get("bullish_rsi_max", 75))
+            # Regime BEARISH
+            CONFIG["v18_bearish_sl_mult"] = float(v18.get("bearish_sl_mult", 1.2))
+            CONFIG["v18_bearish_trail_dist"] = float(v18.get("bearish_trail_dist", 1.5))
+            CONFIG["v18_bearish_trail_limiar"] = float(v18.get("bearish_trail_limiar", 0.6))
+            CONFIG["v18_bearish_adx_min"] = int(v18.get("bearish_adx_min", 15))
+            CONFIG["v18_bearish_rsi_max"] = int(v18.get("bearish_rsi_max", 60))
+            # Detecção de regime
+            CONFIG["v18_regime_ema_fast"] = int(v18.get("regime_ema_fast", 9))
+            CONFIG["v18_regime_ema_slow"] = int(v18.get("regime_ema_slow", 21))
+            CONFIG["v18_regime_ema_trend"] = int(v18.get("regime_ema_trend", 200))
+
+        # Gestão de risco
+        if "risk" in cp:
+            risk = cp["risk"]
+            CONFIG["RISK_PER_TRADE"] = float(risk.get("risk_per_trade", 0.01))
 
     validate_config()
     Auditoria.configurar()
