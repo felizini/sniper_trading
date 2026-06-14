@@ -1,0 +1,4 @@
+2026-06-14 01:39:34 - INFO - Conectado: AXS/USDT
+2026-06-14 01:39:34 - INFO - Regime inicial detectado: LATERAL
+2026-06-14 01:39:34 - ERROR - Erro Vault (Spot→Fundos): binance requires "apiKey" credential
+2026-06-14 01:42:53 - INFO - Estado salvo com sucesso.
